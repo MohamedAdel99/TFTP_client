@@ -129,29 +129,16 @@ class TftpProcessor(object):
 
 
         # This shouldn't change.
-        if in_packet[0]!=3:
-            return in_packet
-        self.packet_buffer.append(in_packet)
-
-
+        if in_packet[0]==3:
+            self.packet_buffer.append(in_packet[2])
+        return in_packet
 
     def _parse_udp_packet(self, packet_bytes):
 
-
-        """
-
-        You'll use the struct module here to determine
-
-        the type of the packet and extract other available
-
-        information.
-
-        """
         if packet_bytes[1]==3:
             f="!hh{}s"
-            f=f.format(len(packet_bytes[3]),len('netascii'))
+            f=f.format(len(packet_bytes[4::]),len('netascii'))
             str=unpack(f,packet_bytes)
-
         elif packet_bytes[1]==4:
             str=unpack("!hh",packet_bytes)
 
@@ -221,61 +208,45 @@ class TftpProcessor(object):
 
 
 
-    def request_file(self, file_path_on_server):
-
-        """
-
-        This method is only valid if you're implementing
-
-        a TFTP client, since the client requests or uploads
-
-        a file to/from a server, one of the inputs the client
-
-        accept is the file name. Remove this function if you're
-
-        implementing a server.
-
-        """
+    def request_file(self, file_path_on_server,client_socket,server_address):
+        self.byte_data=self.seiralization(file_path_on_server,'RRQ')
+        recieved_data,address=do_socket_logic(client_socket,server_address,self.byte_data)
+        ret=self.process_udp_packet(recieved_data,address)
+        f=open(file_path_on_server,'wb')
+        i=0
+        while ret[1]!=0:
+            if ret[0]==3:
+                print("Block "+str(i+1)+" downlading")
+                recieved_data, address = do_socket_logic(client_socket, address,self.seiralization(file_path_on_server,'ACK',ret[1]))
+                ret = self.process_udp_packet(recieved_data, address)
+                f.write(self.packet_buffer[i])
+                i=i+1
+        f.write(self.packet_buffer[i])
+        print("downLoading done")
+        f.close()
 
         pass
 
 
 
     def upload_file(self, file_path_on_server,client_socket,server_address):
-
-        """
-
-        This method is only valid if you're implementing
-
-        a TFTP client, since the client requests or uploads
-
-        a file to/from a server, one of the inputs the client
-
-        accept is the file name. Remove this function if you're
-
-        implementing a server.
-
-        """
         self.byte_data=self.seiralization(file_path_on_server,'WRQ')
         self.seiralization(file_path_on_server, 'DATA')
         recieved_data,address=do_socket_logic(client_socket,server_address,self.byte_data)
         ret=self.process_udp_packet(recieved_data,address)
         if ret[0] == 4 and ret[1] ==0:
             i=0
-            f=1
-
-            while(f):
+            while(self.has_pending_packets_to_be_sent()-1):
                 recieved_data,address = do_socket_logic(client_socket,address, self.packet_buffer[i])
                 ret = self.process_udp_packet(recieved_data, address)
-                if ret[0]==4:
-                    if ret[1]==i:
-                        print("block  sent")
-                        i=i+1
-                        if i>=len(self.packet_buffer):
-                            f=0
+                if ret[0]==4 and ret[1]==int(i+1):
+                    print("block " +str(i+1)+ " sent")
+                    i=i+1
+                    if i>=len(self.packet_buffer):
+                        f=0
                     else:
                         print('error')
-        print('done')
+        print('Upload Done')
 
 
 
@@ -285,7 +256,7 @@ class TftpProcessor(object):
 
         pass
 
-    def seiralization(self,filename, type):
+    def seiralization(self,filename, type,block_num= None):
 
         if type == "RRQ":
             formatter = '!h{}sB{}sB'
@@ -304,13 +275,12 @@ class TftpProcessor(object):
                     if not d:
                         break
                     else:
-                        #f=f.readline()
-            #d = [f[i * 512:(i + 1) * 512] for i in range((len(f) + 512 - 1) // 512)]
-            #for j in range(len(d)):
                         formatter = formatter.format(int(len(d)), len('netascii'))
                         self.packet_buffer.append(struct.pack(formatter,self.DATA,int(j),d))
                         j=j+1
                         srt=self.packet_buffer
+        elif type=="ACK":
+            srt=struct.pack("!hh",self.ACK,block_num)
 
 
         return srt
@@ -359,11 +329,10 @@ def setup_sockets(address):
 
 
 def do_socket_logic(client_socket,server_address,data):
-    print(data)
     client_socket.sendto(data,server_address)
     print("[CLIENT] Done!")
     # The buffer is the size of packet transit in our OS.
-    server_packet ,new_address= client_socket.recvfrom(2048)
+    server_packet ,new_address= client_socket.recvfrom(516)
     print("[CLIENT] IN", server_packet)
     return server_packet,new_address
 
@@ -411,7 +380,7 @@ def parse_user_input(address, operation,socket,server_socket,file_name=None):
     elif operation == "pull":
 
         print(f"Attempting to download [{file_name}]...")
-        TFTP.request_file(file_name)
+        TFTP.request_file(file_name,socket,server_socket)
 
         pass
 
@@ -491,7 +460,7 @@ def main():
 
     ip_address = get_arg(1, "127.0.0.1")
 
-    operation = get_arg(2, "push")
+    operation = get_arg(2, "pull")
 
     file_name = get_arg(3, "test.txt")
 
